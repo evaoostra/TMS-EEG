@@ -1,63 +1,92 @@
-% PREPROCESSING TMS-EEG DATA
+%% PREPROCESSING TMS-EEG DATA 1/2
 %
 % Timo van Hattem
-% Updated: 13-3-2023
-% Adjusted by Emile d'Angremont, 13-9-2023
-
-cd('/scratch/anw/edangremont/TMS-EEG/code/')
+% Last Updated: 29-9-2023
+% Adjusted by Emile d'Angremont, March 2024
+%
+% INPUT: Curry8 files of raw EEG recordings (*.cdt)
+% OUTPUT: raw epochs (*.set)
 %% Clean workspace
 clear
 close all
 clc
 
 %% Set path
+path = uigetdir([],'select TMS-EEG directory on personal Scratch');%path to personal scratch folder, change accordingly to user
+cd(path);
+codepath = [path '/code/'];
+datapath = [path '/data/'];
 %addpath('/data/anw/anw-gold/NP/projects/data_TIPICCO/TMS_EEG/tvh/eeglab2023.0/');
 %addpath(genpath('/data/anw/anw-gold/NP/projects/data_TIPICCO/TMS_EEG/tvh/eeglab2023.0/FastICA_25/'));
-addpath(genpath('/scratch/anw/edangremont/TMS-EEG/data/'));
-addpath('/scratch/anw/edangremont/TMS-EEG/code/'); 
-addpath('/scratch/anw/edangremont/TMS-EEG/code/eeglab2023.0'); 
+addpath(genpath(datapath));
+addpath(codepath); 
+addpath([codepath '/eeglab2023.0']); 
 % addpath(genpath('/scratch/anw/edangremont/TMS-EEG/code/eeglab2023.0/FastICA_25/')); 
 fprintf('Paths added!\n')
 
 %% Initialize variables
-ppn = 'TC923'; %input subject number % make gui out of this
-br = 'rDLPFC'; %input brain region of interest
-
+ppn = input('What is the subject ID?\n','s'); %input subject number
+br = input('And which brain region? (lDLPFC/rDLPFC/M1/preSMA)\n','s'); %input brain region of interest
 % set input and output paths
-DATAIN = ['/scratch/anw/edangremont/TMS-EEG/data/raw/', ppn, '/', br, '/'];
+DATAIN = [datapath, '/raw/', ppn, '/', br, '/'];
 %DATAIN = ['/scratch/anw/tvanhattem/analysis_tvh/TMSEEG_data/convert/', ppn, '/', br, '/'];
-DATAOUT = '/scratch/anw/edangremont/TMS-EEG/data/processed/';
+DATAOUT = [datapath '/processed/', ppn, '/', br, '/'];
+if isfile([DATAOUT, ppn, '_rawepochs_', br, '_SP.set'])
+    answ = input('Preprocessing step 1 seems to be done already for this brain region, do you want to redo it? (y/n)\n','s');
+    switch answ
+        case 'n'
+            answ2 = input('Do you want to continue with preprocessing part 2? (y/n)\n','s');
+            switch answ2
+                case 'y'
+                    preprocessing_2;
+                    return
+                case 'n'
+                    disp('OK, bye!');
+                    return
+            end
+    end
+end
 
 %% Import data
-eeglab;
-EEG = loadcurry([DATAIN, dir(fullfile(DATAIN, '*.cdt')).name], 'KeepTriggerChannel', 'False', 'CurryLocations', 'False');
+eeglab;close;
+checkset = dir(fullfile(DATAIN, '*.set'));
+if ~isempty(checkset)
+    EEG = pop_loadset('filename', checkset.name, 'filepath', DATAIN);
+else
+    EEG = loadcurry([DATAIN, dir(fullfile(DATAIN, '*.cdt')).name], 'KeepTriggerChannel', 'False', 'CurryLocations', 'False'); %load raw file (*.cdt)
+end
 %EEG = pop_biosig(); %for loading convert file
-fprintf('N_events start processing: %d\n', length(EEG.event)); % manually add to excel file?
+fprintf('N_events start processing: %d\nPlease add to Excel file and press a key to continue\n', length(EEG.event)); % manually add to excel file
+pause;
 
 %% Load channel locations
-EEG = pop_chanedit(EEG,'lookup','/scratch/anw/edangremont/TMS-EEG/code/eeglab2023.0/plugins/dipfit/standard_BEM/elec/standard_1020.elc');
+EEG = pop_chanedit(EEG,'lookup',[codepath '/eeglab2023.0/plugins/dipfit/standard_BEM/elec/standard_1020.elc']);
 
 %% Remove unused electrodes
-EEG = pop_select(EEG, 'nochannel', 63:68); % these are not used
-EEG.allchan = EEG.chanlocs;
+EEG = pop_select(EEG, 'nochannel', 63:68); %remove channel 31, 32, VEOG, HEOG, EKG, EMG
+EEG.allchan = EEG.chanlocs; %save original information / changes in final dataset
 
 %% Automated removal bad electrodes step 1
 EEG = pop_clean_rawdata(EEG, 'FlatlineCriterion',5,'Highpass', 'off','ChannelCriterion',0.8,...
     'LineNoiseCriterion',4,'BurstCriterion','off','WindowCriterion','off'); % should these parameters be saved somewhere?
-% EEG.rejchan = find(~ismember([EEG.allchan.urchan], [EEG.chanlocs.urchan]));
-rejchan_one = setdiff({EEG.allchan.labels}, {EEG.chanlocs.labels}); % I think this is superior to the previous line
-fprintf('Rejected channel step 1: %s\n',rejchan_one{:}); % manually copy into excel file?
+rejchan_one = setdiff({EEG.allchan.labels}, {EEG.chanlocs.labels});
+fprintf('Rejected channels step 1: ');
+fprintf('%s ',rejchan_one{:}); % manually add to excel file
+fprintf('\nPlease add to Excel file and press a key to continue\n');
+pause;
 
 %% Automated removal bad electrodes step 2
-EEG = pop_rejchan(EEG, 'elec', 1:size(EEG.data,1), 'threshold', 4, 'norm', 'on', 'measure', 'kurt'); % same for these parameters
-% EEG.rejchan = find(~ismember([EEG.allchan.urchan], [EEG.chanlocs.urchan]));
+EEG = pop_rejchan(EEG, 'elec', 1:size(EEG.data,1), 'threshold', 4, 'norm', 'on', 'measure', 'kurt'); % based on kurtosis
 rejchan_two = setdiff(setdiff({EEG.allchan.labels}, {EEG.chanlocs.labels}),rejchan_one);
-fprintf('Rejected channel step 2: %s\n',rejchan_two{:}); % manually copy into excel file?
+fprintf('Recjected channels step 2: ');
+fprintf('%s ',rejchan_two{:}); % manually add to excel file
+fprintf('\nPlease add to Excel file and press a key to continue\n');
 EEG.rejchan = [rejchan_one rejchan_two];
+pause;
 
-% manual rejection of electrodes should be added here
 %% Fix latency of events in D2 and D10 condition (from marker on conditioning pulse to marker on test pulse)
-EEG.oldeventlatency = [EEG.event.latency];
+EEG.oldeventlatency = [EEG.event.latency]; %save original information / changes in final dataset
+disp('Fixing latencies');
 for i = 1:size(EEG.event,2)
     if EEG.event(i).type == 3
         EEG.event(i).latency = EEG.event(i).latency + 21;
@@ -92,34 +121,65 @@ EEG_D10.rawurevents = EEG_D10.urevent;
 
 %% Manually check for true presence of TMS-pulse at given marker SP
 EEG_pulsecheck_SP = epoch2continuous(EEG_SP);
-EEG_pulsecheck_SP = tesa_findpulse(EEG_pulsecheck_SP, 'CZ', 'refract', 10, 'rate', 2e4, 'tmsLabel', 'SP'); % CZ, but PZ can be used if CZ was already filtered out
+EEG_pulsecheck_SP = tesa_findpulse(EEG_pulsecheck_SP, 'PZ', 'refract', 10, 'rate', 2e4, 'tmsLabel', 'SP'); % CZ, but PZ can be used if CZ was already filtered out
+xticks([EEG_SP.event.latency]);xticklabels([EEG_SP.event.epoch]);
 EEG_SP.pulseinfo = EEG_pulsecheck_SP.event;
-fprintf('Is number of single pulses detected equal to %d?\n',EEG_SP.trials);
+answ = input(sprintf('Is number of single pulses detected equal to %d (y/n)?\n',EEG_SP.trials),'s');
+switch answ
+    case 'n'
+        epochs = input('Please enter the epochs without TMS artefact (e.g. [43, 55] or [43:46]):\n');
+        EEG_SP = pop_select(EEG_SP, 'notrial', epochs); %if missing visible TMS artefact at given markers, delete epochs in question
+end
 % pop_eegplot(EEG_pulsecheck_SP,1,1,1);
-% EEG_SP = pop_select(EEG_SP, 'notrial', [44:51])
 
 %% Manually check for true presence of TMS-pulse at given marker D2
 EEG_pulsecheck_D2 = epoch2continuous(EEG_D2);
-EEG_pulsecheck_D2 = tesa_findpulse(EEG_pulsecheck_D2, 'CZ', 'refract', 2, 'rate', 2e4, 'paired', 'yes', 'ISI', 2);
+EEG_pulsecheck_D2 = tesa_findpulse(EEG_pulsecheck_D2, 'PZ', 'refract', 2, 'rate', 2e4, 'paired', 'yes', 'ISI', 2);
+xticks([EEG_D2.event.latency]);xticklabels([EEG_D2.event.epoch]);
 EEG_D2.pulseinfo = EEG_pulsecheck_D2.event;
-fprintf('Is number of test pulses detected equal to %d?\n',EEG_D2.trials); % dit automatiseren (latencies vergelijken en epoch verwijderen waar niet overeen)
+answ = input(sprintf('Is number of test pulses (2ms ISI) detected equal to %d (y/n)?\n',EEG_D2.trials),'s');
+switch answ
+    case 'n'
+        eps = input('Please enter the epochs without TMS artefact (e.g. [43, 55] or [43:46]):\n');
+        EEG_D2 = pop_select(EEG_D2, 'notrial', eps); %if missing visible TMS artefact at given markers, delete epochs in question
+end
 % pop_eegplot(EEG_pulsecheck_D2,1,1,1);
-% EEG_D2 = pop_select(EEG_D2, 'notrial', [43:44]);
 
 %% Manually check for true presence of TMS-pulse at given marker D10
 EEG_pulsecheck_D10 = epoch2continuous(EEG_D10);
-EEG_pulsecheck_D10 = tesa_findpulse(EEG_pulsecheck_D10, 'CZ', 'refract', 10, 'rate', 2e4, 'paired', 'yes', 'ISI', 10);
+EEG_pulsecheck_D10 = tesa_findpulse(EEG_pulsecheck_D10, 'PZ', 'refract', 10, 'rate', 2e4, 'paired', 'yes', 'ISI', 10);
+xticks([EEG_D10.event.latency]);xticklabels([EEG_D10.event.epoch]);
 EEG_D10.pulseinfo = EEG_pulsecheck_D10.event;
-fprintf('Is number of test pulses detected equal to %d?\n',EEG_D10.trials);
+answ = input(sprintf('Is number of test pulses (10ms ISI) detected equal to %d (y/n)?\n',EEG_D10.trials),'s');
+switch answ
+    case 'n'
+        eps = input('Please enter the epochs without TMS artefact (e.g. [43, 55] or [43:46]):\n');
+        EEG_D10 = pop_select(EEG_D10, 'notrial', eps); %if missing visible TMS artefact at given markers, delete epochs in question
+end
 % pop_eegplot(EEG_pulsecheck_D10,1,1,1);
-% EEG_D10 = pop_select(EEG_D10, 'notrial', [21]);
 
 %% Number of raw epochs per condition
-fprintf('N_rawepochs (SP/D2/D10): %d/%d/%d\n', length(EEG_SP.epoch),... % klopt dit nu?
+fprintf('N_rawepochs (SP/D2/D10): %d/%d/%d\nPlease add to Excel file and press a key to continue\n', length(EEG_SP.epoch),... % klopt dit nu?
     length(EEG_D2.epoch), length(EEG_D10.epoch));
+pause;
 
 %% Seperate epochs for conditions and save
-mkdir([DATAOUT, '/', ppn, '/', br])
-pop_saveset(EEG_SP, 'filename', [ppn, '_rawepochs_', br, '_SP.set'], 'filepath', [DATAOUT, ppn, '/', br]);
-pop_saveset(EEG_D2, 'filename', [ppn, '_rawepochs_', br, '_D2.set'], 'filepath', [DATAOUT, ppn, '/', br]);
-pop_saveset(EEG_D10, 'filename', [ppn, '_rawepochs_', br, '_D10.set'], 'filepath', [DATAOUT, ppn, '/', br]);
+mkdir(DATAOUT);
+pop_saveset(EEG_SP, 'filename', [ppn, '_rawepochs_', br, '_SP.set'], 'filepath', DATAOUT);
+pop_saveset(EEG_D2, 'filename', [ppn, '_rawepochs_', br, '_D2.set'], 'filepath', DATAOUT);
+pop_saveset(EEG_D10, 'filename', [ppn, '_rawepochs_', br, '_D10.set'], 'filepath', DATAOUT);
+
+close all;
+answ = input('Preprocessing part 1 is done! Do you immediately want to continue with part 2? (y/n)\n','s');
+switch answ
+    case 'y'
+        preprocessing_2;
+    case 'n'
+        answ2 = input('Do you want to continue with a different brain area or subject? (y/n)\n','s');
+        switch answ2
+            case 'y'
+                preprocessing_1;
+            case 'n'
+                disp('OK, bye!');
+        end
+end
